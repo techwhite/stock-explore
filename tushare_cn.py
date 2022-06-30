@@ -1,4 +1,4 @@
-import common as lib
+import commonV2 as lib
 
 import tushare as ts
 import datetime
@@ -38,27 +38,28 @@ def sub_find(sub_stocks: DataFrame):
     sub_candidates = []
     for ts_code in code_list:
         if str(ts_code).startswith('3'):
+            # 创业板暂不支持
             continue
 
         if ts_code not in keys:
             continue
 
         detail = detail_map.get_group(ts_code)
-        # todo: sort by trade date
+        # sort by trade date and reindex
+        detail = detail.sort_values(by='trade_date')
         new_detail = detail.reset_index()
-        if lib.is_sharp(new_detail):
-            candidate = sub_stocks.loc[sub_stocks['ts_code'] == ts_code]
-            candidate['type'] = 'sharp'
-            print('\nsharp stock:')
-            print(candidate)
-            sub_candidates.append(candidate)
 
-        if lib.is_band(new_detail):
-            candidate = sub_stocks.loc[sub_stocks['ts_code'] == ts_code]
-            candidate['type'] = 'band'
-            print('\nband stock:')
-            print(candidate)
-            sub_candidates.append(candidate)
+        meta_data = {}
+        st = lib.stock_analysis(new_detail, meta_data)
+        if st != lib.StockType.BAND_INCREASE:
+            continue
+
+        # todo: fix
+        candidate = sub_stocks.loc[sub_stocks['ts_code'] == ts_code]
+        candidate['type'] = 'sharp'
+        print('\nsharp stock:')
+        print(candidate)
+        sub_candidates.append(candidate)
 
     return sub_candidates
 

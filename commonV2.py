@@ -160,6 +160,90 @@ def candidate(detail: DataFrame) -> list:
     return candidates
 
 
+def candidate_pole2(detail: DataFrame, meta_data: {}) -> list:
+    # todo:magic
+    pole_least_window = 9
+
+    candidates = []
+
+    # todo: need to consider consolidation
+    shift = int(pole_least_window/2)
+    min_p = None
+    min_idx = None
+    max_p = None
+    max_idx = None
+    pre_increase = None
+    cur_increase = None
+    pre_mid = None
+    for idx in range(shift, len(detail), shift):
+        values = detail[Const.SMOOTH_KEY.name]
+        start = idx-shift
+        end = idx+shift+1
+        if end > len(detail):
+            end = len(detail)
+
+        cur_max = None
+        cur_max_idx = None
+        cur_min = None
+        cur_min_idx = None
+        for i in range(start, end, 1):
+            if cur_max is None or values[i] > cur_max:
+                cur_max = values[i]
+                cur_max_idx = i
+            if cur_min is None or values[i] < cur_min:
+                cur_min = values[i]
+                cur_min_idx = i
+
+        cur_mid = sum(values[idx:end])/(end-idx)
+        if pre_mid is None:
+            pre_mid = sum(values[start:idx+1])/(idx+1-start)
+
+        if cur_mid > pre_mid:
+            cur_increase = True
+        else:
+            cur_increase = False
+        pre_mid = cur_mid
+
+        if max_p is None or cur_max > max_p:
+            max_p = cur_max
+            max_idx = cur_max_idx
+        if min_p is None or cur_min < min_p:
+            min_p = cur_min
+            min_idx = cur_min_idx
+
+        if pre_increase is None:
+            pre_increase = cur_increase
+        if cur_increase is pre_increase:
+            continue
+
+        if pre_increase is True:
+            if len(candidates) == 0:  # todo: remove for more accurate?
+                candidates.append((min_idx, PoleType.LOW))
+                min_idx = None
+                min_p = None
+            candidates.append((max_idx, PoleType.HIGH))
+            max_idx = None
+            max_p = None
+        else:
+            if len(candidates) == 0:
+                candidates.append((max_idx, PoleType.HIGH))
+                max_idx = None
+                max_p = None
+            candidates.append((min_idx, PoleType.LOW))
+            min_idx = None
+            min_p = None
+
+        pre_increase = cur_increase
+
+    # tail process. todo：remove for more accurate?
+    if cur_increase is True:
+        candidates.append((max_idx, PoleType.HIGH))
+    else:
+        candidates.append((min_idx, PoleType.LOW))
+
+    return candidates
+
+
 # return: list of pair(idx, poletype)
 def candidate_pole(detail: DataFrame) -> list:
     # todo:magic
@@ -270,8 +354,8 @@ def check_discard(intervals: list, changes: list):
 def get_discard_type(poles: list, detail: DataFrame):
 
     # latest pole
-    tp = poles[-1][PoleType.name]
-    date = poles[-1]['trade_date']
+    pt = poles[-1][1]
+    date = detail.iloc[poles[-1][0]]['trade_date']
 
     date_dist = dict()
     for idx in range(0, len(detail)):
@@ -281,19 +365,19 @@ def get_discard_type(poles: list, detail: DataFrame):
     if date_dist[date] > latest_pole_max_distinct:
         return DiscardReason.TOO_FAR
 
-    is_market_increase = is_market_trade_increase()
-    if is_market_increase and tp == PoleType.HIGH or is_market_increase is False and tp == PoleType.LOW:
-        return DiscardReason.INVERSE_MARKET
+    # is_market_increase = is_market_trade_increase()
+    # if is_market_increase and tp == PoleType.HIGH or is_market_increase is False and tp == PoleType.LOW:
+    #     return DiscardReason.INVERSE_MARKET
 
     # trade date should cross between high/low points
-    pre_type = poles[0][PoleType.name]
+    pre_pt = poles[0][1]
     for idx in range(1, len(poles)):
-        tp = poles[idx][PoleType.name]
-        if tp == pre_type:
+        pt = poles[idx][1]
+        if pt == pre_pt:
             print('bad pole type in two align poles')
             return DiscardReason.SAME_ALIGN_POLES
 
-        pre_type = tp
+        pre_pt = pt
 
     # todo: interval between two trade dates should be similar??
     if len(poles) < 3:
@@ -303,8 +387,11 @@ def get_discard_type(poles: list, detail: DataFrame):
     intervals = []
     changes = []
     for idx in range(0, len(poles)-1, 2):
-        intervals.append(date_diff(poles[idx]['trade_date'], poles[idx+1]['trade_date']))
-        changes.append(abs(poles[idx][Const.SMOOTH_KEY.name] - poles[idx+1][Const.SMOOTH_KEY.name]) / poles[idx][Const.SMOOTH_KEY.name])
+        intervals.append(date_diff(detail.iloc[poles[idx][0]]['trade_date'],
+                                   detail.iloc[poles[idx+1][0]]['trade_date']))
+        changes.append(abs(detail.iloc[poles[idx][0]][Const.SMOOTH_KEY.name] -
+                           detail.iloc[poles[idx+1][0]][Const.SMOOTH_KEY.name]) /
+                       detail.iloc[poles[idx][0]][Const.SMOOTH_KEY.name])
 
     discard_type = check_discard(intervals, changes)
     if discard_type is not DiscardReason.NONE:
@@ -313,8 +400,11 @@ def get_discard_type(poles: list, detail: DataFrame):
     intervals.clear()
     changes.clear()
     for idx in range(1, len(poles) - 1, 2):
-        intervals.append(date_diff(poles[idx]['trade_date'], poles[idx + 1]['trade_date']))
-        changes.append(abs(poles[idx][Const.SMOOTH_KEY.name] - poles[idx + 1][Const.SMOOTH_KEY.name]) / poles[idx][Const.SMOOTH_KEY.name])
+        intervals.append(date_diff(detail.iloc[poles[idx][0]]['trade_date'],
+                                   detail.iloc[poles[idx+1][0]]['trade_date']))
+        changes.append(abs(detail.iloc[poles[idx][0]][Const.SMOOTH_KEY.name] -
+                           detail.iloc[poles[idx+1][0]][Const.SMOOTH_KEY.name]) /
+                       detail.iloc[poles[idx][0]][Const.SMOOTH_KEY.name])
 
     discard_type = check_discard(intervals, changes)
     if discard_type is not DiscardReason.NONE:
@@ -325,9 +415,9 @@ def get_discard_type(poles: list, detail: DataFrame):
 
 # return dataframe rows with pole type value
 def find_poles(detail: DataFrame, meta_data: {}) -> list:
-    poles = candidate_pole(detail)
+    poles = candidate_pole2(detail, meta_data)
 
-    remove_fake(poles, detail)
+    # remove_fake(poles, detail)
 
     return poles
 
@@ -347,18 +437,21 @@ def smooth_values(detail: DataFrame, in_size: int):
 
     shift = in_size / 2
     for idx in range(0, len(detail)):
-        mid_sum = detail.iloc[idx][Const.SMOOTH_KEY.name]
-        i = 1
-        while idx > 0 and i <= shift:
-            mid_sum += detail.iloc[idx-i][Const.SMOOTH_KEY.name]
-            i += 1
-        i = 1
-        while idx < len(detail)-1 and i <= shift:
-            mid_sum += detail.iloc[idx+i][Const.SMOOTH_KEY.name]
-            i += 1
+        idx_p = detail.iloc[idx][Const.SMOOTH_KEY.name]
+        left_n = 1
+        left_sum = 0
+        while idx-left_n >= 0 and left_n <= shift:
+            left_sum += detail.iloc[idx-left_n][Const.SMOOTH_KEY.name]
+            left_n += 1
 
-        avg = mid_sum / in_size
-        detail.iloc[idx][Const.SMOOTH_KEY.name] = avg
+        right_n = 1
+        right_sum = 0
+        while idx+right_n < len(detail) and right_n <= shift:
+            right_sum += detail.iloc[idx+right_n][Const.SMOOTH_KEY.name]
+            right_n += 1
+
+        avg = (left_sum+right_sum)/(left_n+right_n-2)
+        detail.loc[idx, Const.SMOOTH_KEY.name] = idx_p + (avg-idx_p)/2
 
 
 # todo:
@@ -371,7 +464,7 @@ def check_quality(poles: list, detail: DataFrame, meta_data: {}) -> StockType:
         meta_data[DebugKey.STOCK_TYPE] = StockType.DISCARD
         return
 
-    meta_data[DebugKey.STOCK_TYPE] = StockType.SHARP
+    meta_data[DebugKey.STOCK_TYPE] = StockType.BAND_INCREASE
 
 
 # ['ts_code', 'trade_date', 'open', 'high', 'low', 'close', 'pre_close', 'change', 'pct_chg', 'vol', 'amount']
@@ -380,15 +473,14 @@ def stock_analysis(stock_detail: DataFrame, meta_data: {}):
         meta_data[DebugKey.DISCARD_REASON] = DiscardReason.TOO_SHORT_DAY_DATA
         return StockType.DISCARD
 
-    # todo: 统一处理
-    new_detail = stock_detail.sort_values(by='trade_date')
-    stock_detail = new_detail.reset_index()
-
     # todo:magic number
     # savgol_smooth(stock_detail)
-    smooth_values(stock_detail, 3)
+    smooth_values(stock_detail, 7)
+    smooth_values(stock_detail, 5)
+    # smooth_values(stock_detail, 3)
 
     poles = find_poles(stock_detail, meta_data)
+    show_graph_pole(stock_detail, poles)
 
     check_quality(poles, stock_detail, meta_data)
 
@@ -407,9 +499,9 @@ def get_new_int_value(origin: float, base: float):
 
 
 # x is array type
-# y is list of pair(data array, label name)
+# y is list of pair(data array, label name) for multiple lines drawing
 def show_graph(title: str, x, y: list):
-    colors = list('green', 'red', 'blue', 'yellow', 'black')
+    colors = ['green', 'red', 'blue', 'yellow', 'black']
     fig = plt.figure(1)
     plt.rcParams['font.sans-serif'] = ['SimHei']  # used to display chinese
     plt.title(title)
@@ -423,8 +515,28 @@ def show_graph(title: str, x, y: list):
         plt.plot(x, p[0], color=color, label=p[1])
 
     plt.draw()
-    plt.pause(4)
+    plt.pause(100)  # display interval before disappear
     plt.close(fig)
+
+
+def show_graph_pole(detail: DataFrame, poles: list):
+    debug_data = detail.copy(True)
+    # show_kline_graph(debug_data)
+    max_v = max(debug_data['high'])
+    min_v = min(debug_data['low'])
+    depth = max_v - min_v
+    for idx in range(0, len(debug_data)):
+        debug_data.loc[idx, 'open'] = debug_data.iloc[idx][Const.SMOOTH_KEY.name]
+        debug_data.loc[idx, 'close'] = debug_data.iloc[idx][Const.SMOOTH_KEY.name]
+        debug_data.loc[idx, 'low'] = debug_data.iloc[idx][Const.SMOOTH_KEY.name]
+        debug_data.loc[idx, 'high'] = debug_data.iloc[idx][Const.SMOOTH_KEY.name]
+    for elem in poles:
+        if elem[1] is PoleType.LOW:
+            debug_data.loc[elem[0], 'low'] = min_v - depth / 2
+        else:
+            debug_data.loc[elem[0], 'high'] = max_v + depth / 2
+
+    show_kline_graph(debug_data)
 
 
 def show_kline_graph(detail: DataFrame):
@@ -435,7 +547,8 @@ def show_kline_graph(detail: DataFrame):
 
     detail['Date'] = pd.to_datetime(detail['Date'])
     detail.set_index("Date", inplace=True)
-    mpf.plot(detail, type='candle', mav=(3, 6, 9), volume=True, title=ts_code)
+    # mpf.plot(detail, type='candle', mav=(3, 6, 9), volume=True, title=ts_code)
+    mpf.plot(detail, type='candle', mav=3, volume=False, title=ts_code)
 
 
 # ['ts_code', 'trade_date', 'open', 'high', 'low', 'close', 'pre_close', 'change', 'pct_chg', 'vol', 'amount']
