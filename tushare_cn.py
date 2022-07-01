@@ -4,6 +4,7 @@ import tushare as ts
 import datetime
 from pandas import DataFrame
 import pandas as pd
+from noname import *
 
 pd.set_option('mode.chained_assignment', None)
 
@@ -23,7 +24,7 @@ def do_query(ts_codes: str):
 
 
 # sub find
-def sub_find(sub_stocks: DataFrame):
+def sub_find(sub_stocks: DataFrame, stat: {}):
     code_list = sub_stocks['ts_code'].tolist()
     ts_codes = ','.join(code_list)
 
@@ -51,6 +52,10 @@ def sub_find(sub_stocks: DataFrame):
 
         meta_data = {}
         st = lib.stock_analysis(new_detail, meta_data)
+        if stat.get(meta_data[DebugKey.DISCARD_REASON]) is None:
+            stat[meta_data[DebugKey.DISCARD_REASON]] = 0
+        stat[meta_data[DebugKey.DISCARD_REASON]] = stat.get(meta_data[DebugKey.DISCARD_REASON]) + 1
+
         if st != lib.StockType.BAND_INCREASE:
             continue
 
@@ -68,6 +73,9 @@ def find():
     stocks = pro.stock_basic(exchange='', list_status='L', fields='ts_code,symbol,name,area,industry,list_date')
     candiates = []
 
+    # stat
+    stat = {}
+
     length = len(stocks)
     idx = 0
     while idx < length:
@@ -76,11 +84,13 @@ def find():
             end_idx = length
 
         sub_stocks = stocks[idx:end_idx]
-        sub_candiates = sub_find(sub_stocks)
+        sub_candiates = sub_find(sub_stocks, stat)
         if len(sub_candiates) != 0:
             candiates += sub_candiates
 
         idx = end_idx
+
+    print(stat)
 
     return candiates
 

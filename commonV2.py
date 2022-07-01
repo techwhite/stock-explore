@@ -3,9 +3,9 @@ from math import *
 import mplfinance as mpf
 from matplotlib import pyplot as plt
 import time
-from enum import Enum
 from pandas import DataFrame
 import pandas as pd
+from noname import *
 import numpy as np
 from scipy.signal import savgol_filter
 
@@ -23,46 +23,13 @@ window_size = 13  # must be odd. 提高此值筛选更大周期的波段股票
 ex_threshold = int(window_size / 4)  # 梯度下降提升，异常数量
 half_window_size = int(window_size/2)
 point_interval_thres = 2.5  #波峰、波谷之间距离和均值之间的误差阈值
-point_interval_least = 7
+point_interval_least = 4
 point_change_least = 0.13
 
 latest_pole_max_distinct = 3 # 最近的点不能太远
 hot_days = 3  # 保证大于2，最近几天交易量大增，价格上涨
 
 
-# consts
-class Const(Enum):
-    SMOOTH_KEY = 0
-
-
-class DebugKey(Enum):
-    SCORE = 0,
-    DISCARD_REASON = 1,
-    STOCK_TYPE = 2,
-
-
-class StockType(Enum):
-    DISCARD = 0,
-    SHARP = 1,
-    BAND_INCREASE = 2,
-    BAND_DECREASE = 3,
-    BAND_CONSOLIDATION = 4
-
-
-class DiscardReason(Enum):
-    NONE = 0,
-    TOO_FAR = 1,
-    INVERSE_MARKET = 2,
-    SAME_ALIGN_POLES = 3,
-    TOO_LITTLE_POLES = 4,
-    POLES_INTERVAL_TOO_SMALL = 5,
-    POLES_CHANGE_TOO_SMALL = 6,
-    TOO_SHORT_DAY_DATA = 7
-
-
-class PoleType(Enum):
-    LOW = 0,
-    HIGH = 1
 
 
 def angle_trunc(a):
@@ -217,18 +184,18 @@ def candidate_pole2(detail: DataFrame, meta_data: {}) -> list:
             continue
 
         if pre_increase is True:
-            if len(candidates) == 0:  # todo: remove for more accurate?
-                candidates.append((min_idx, PoleType.LOW))
-                min_idx = None
-                min_p = None
+            # if len(candidates) == 0:  # todo: remove for more accurate?
+            #     candidates.append((min_idx, PoleType.LOW))
+            #     min_idx = None
+            #     min_p = None
             candidates.append((max_idx, PoleType.HIGH))
             max_idx = None
             max_p = None
         else:
-            if len(candidates) == 0:
-                candidates.append((max_idx, PoleType.HIGH))
-                max_idx = None
-                max_p = None
+            # if len(candidates) == 0:
+            #     candidates.append((max_idx, PoleType.HIGH))
+            #     max_idx = None
+            #     max_p = None
             candidates.append((min_idx, PoleType.LOW))
             min_idx = None
             min_p = None
@@ -236,10 +203,10 @@ def candidate_pole2(detail: DataFrame, meta_data: {}) -> list:
         pre_increase = cur_increase
 
     # tail process. todo：remove for more accurate?
-    if cur_increase is True:
-        candidates.append((max_idx, PoleType.HIGH))
-    else:
-        candidates.append((min_idx, PoleType.LOW))
+    # if cur_increase is True and max_p is not None:
+    #     candidates.append((max_idx, PoleType.HIGH))
+    # if cur_increase is False and min_p is not None:
+    #     candidates.append((min_idx, PoleType.LOW))
 
     return candidates
 
@@ -342,20 +309,27 @@ def check_discard(intervals: list, changes: list):
     avg_interval = sum(intervals) / len(intervals)
     avg_change = sum(changes) / len(changes)
 
-    # todo: 间距不能太小??
+    # 相比值变化，不是那么重要。但也要有底线值
     if avg_interval < point_interval_least:
         return DiscardReason.POLES_INTERVAL_TOO_SMALL
 
-    # todo: 高低点之间的变动不能太小??
+    # 高低点之间的变动不能太小
     if avg_change < point_change_least:
         return DiscardReason.POLES_CHANGE_TOO_SMALL
 
 
 def get_discard_type(poles: list, detail: DataFrame):
 
+    # todo: interval between two trade dates should be similar??
+
+    if len(poles) < 3:
+        return DiscardReason.TOO_LITTLE_POLES
+
     # latest pole
     pt = poles[-1][1]
     date = detail.iloc[poles[-1][0]]['trade_date']
+    if pt is PoleType.HIGH:
+        return DiscardReason.SHORT_SELLING
 
     date_dist = dict()
     for idx in range(0, len(detail)):
@@ -378,10 +352,6 @@ def get_discard_type(poles: list, detail: DataFrame):
             return DiscardReason.SAME_ALIGN_POLES
 
         pre_pt = pt
-
-    # todo: interval between two trade dates should be similar??
-    if len(poles) < 3:
-        return DiscardReason.TWO_LITTLE_POLES
 
     # todo: optimize
     intervals = []
@@ -480,9 +450,10 @@ def stock_analysis(stock_detail: DataFrame, meta_data: {}):
     # smooth_values(stock_detail, 3)
 
     poles = find_poles(stock_detail, meta_data)
-    show_graph_pole(stock_detail, poles)
+    # show_graph_pole(stock_detail, poles)
 
     check_quality(poles, stock_detail, meta_data)
+    # if meta_data[DebugKey.STOCK_TYPE] is not StockType.DISCARD:
 
 
 def date_diff(d1: str, d2: str):
