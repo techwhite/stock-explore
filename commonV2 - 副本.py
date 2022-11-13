@@ -1,13 +1,20 @@
+import math
+from math import *
 import mplfinance as mpf
+from matplotlib import pyplot as plt
 import time
 from pandas import DataFrame
 import pandas as pd
 from noname import *
+import numpy as np
+from scipy.signal import savgol_filter
 
 
 pd.set_option('mode.chained_assignment', None)
 
 # parameters
+pole_min_interval = 5
+min_data_day = pole_min_interval*4  # 股票历史数据 最小天数
 
 # better not greater than 9
 pole_normal_window = 9
@@ -18,21 +25,118 @@ shift_normal = int(pole_normal_window/2)
 shift_tail = int(pole_tail_window/2)
 shift_head = int(pole_head_window/2)
 
-point_interval_least = 4
-point_change_least = 0.13
-min_data_day = point_interval_least*4  # 股票历史数据 最小天数
-latest_pole_max_distinct = 5 # 最近的点不能太远
-
-# used for is_sharp
 hot_vol_ratio = 3  # 最近hot_days平均交易量/历史平均交易量
 daily_change_thre = 0.5  # 最近每天价格涨幅比例
+window_size = 13  # must be odd. 提高此值筛选更大周期的波段股票
+ex_threshold = int(window_size / 4)  # 梯度下降提升，异常数量
+half_window_size = int(window_size/2)
+point_interval_thres = 2.5  #波峰、波谷之间距离和均值之间的误差阈值
+point_interval_least = 4
+point_change_least = 0.13
+
+latest_pole_max_distinct = 5 # 最近的点不能太远
 hot_days = 3  # 保证大于2，最近几天交易量大增，价格上涨
 
 
+
+
+def angle_trunc(a):
+    while a < 0.0:
+        a += pi * 2
+    b = a * 180 / pi
+    if b > 270:
+        b -= 360
+    if -90 < b < 90:
+        return b
+
+    print("invalid angle:{0}", b)
+
+
+def get_angle_between_points(x_orig, y_orig, x_landmark, y_landmark):
+    delta_y = y_landmark - y_orig
+    delta_x = x_landmark - x_orig
+    return angle_trunc(atan2(delta_y, delta_x))
+
+
+# angle between two vector
+# v1:[x1,y1,x2,y2] director is p1 to p2
+# v2:xxx
+def angle(v1, v2):
+    dx1 = v1[2] - v1[0]
+    dy1 = v1[3] - v1[1]
+    dx2 = v2[2] - v2[0]
+    dy2 = v2[3] - v2[1]
+    angle1 = math.atan2(dy1, dx1)
+    angle1 = int(angle1 * 180/math.pi)
+    # print(angle1)
+    angle2 = math.atan2(dy2, dx2)
+    angle2 = int(angle2 * 180/math.pi)
+    # print(angle2)
+    if angle1*angle2 >= 0:
+        included_angle = abs(angle1-angle2)
+    else:
+        included_angle = abs(angle1) + abs(angle2)
+    if included_angle > 180:
+        included_angle = 360 - included_angle
+    return included_angle
+
+
+def get_trade_date(s):
+    return s['trade_date']
+
+
+# return: list of pair(idx, poletype)
+def candidate(detail: DataFrame) -> list:
+    # todo:magic
+    pole_least_window = 7
+    shift = pole_least_window / 2
+
+    values = detail[Const.SMOOTH_KEY.name].tolist()
+
+    # idx -> angle value
+    point_angles = {}
+    candidates = []
+    for idx in range(0, len(detail) - shift):
+        idx_p = values[idx]
+        s = 0
+        for i in range(1, shift+1):
+            s += values[idx+i]
+        avg_p = s/shift
+
+        # todo: consider consolidation/increasing/decreasing mode
+        # means increasing trade, fast skip
+        if avg_p > idx_p:
+            continue
+
+        # means had evaluated, skip
+        if idx in point_angles.keys():
+            continue
+
+        if idx == 0:
+            continue
+
+        left = 0
+        if idx > shift:
+            left = idx - shift
+        right = idx + 2 * shift
+        if right >= len(detail):
+            right = len(detail)-1
+        # choose minimum angle point
+        minimum_angle = 360
+        minimum_point = idx
+        for i in range(idx, idx+shift):
+            ag = angle([i, values[i], left, values[left]], [i, values[i], right, values[right]])
+            point_angles[idx] = ag
+            if ag < minimum_angle:
+                minimum_angle = ag
+                minimum_point = i
+        candidates.append((minimum_point, PoleType.LOW))  # todo: low by default
+
+    return candidates
+
 # 每次移动一半窗口长度的移动窗口中，判断前半部分平均值，后半部分平均值，比较两个平均值，决定是增长趋势还是下降趋势。
 # 并记录最大值或最小值。若当前趋势和前一个窗口的趋势相同，则继续移动；若不同，则到达了峰点或谷底，寻找成功
-# return dataframe rows with pole type value
-def find_poles(detail: DataFrame, meta_data: {}) -> list:
+def candidate_pole2(detail: DataFrame, meta_data: {}) -> list:
 
     candidates = []
 
@@ -114,37 +218,49 @@ def find_poles(detail: DataFrame, meta_data: {}) -> list:
 
         idx = idx + shift
 
+    # tail process. todo：remove for more accurate?
+    # if cur_increase is True and max_p is not None:
+    #     candidates.append((max_idx, PoleType.HIGH))
+    # if cur_increase is False and min_p is not None:
+    #     candidates.append((min_idx, PoleType.LOW))
+
     return candidates
 
 
 def check_long_value_type(detail: DataFrame, meta_data: {}) -> list:
+
+    candidates = []
+
     values = detail[Const.SMOOTH_KEY.name]
     pre_increase = None
     cur_increase = None
-    idx = 0
-    shift = shift_normal
+    pre_avg = None
+    idx = pole_normal_window
     while idx < len(detail):
-        start = idx - shift
+
+        start = idx - pole_normal_window
         if start < 0:
             start = 0
-        end = idx + shift + 1
-        if end > len(detail):
-            end = len(detail)
+        end = idx
 
-        cur_avg = sum(values[idx:end]) / (end - idx)
-        pre_avg = sum(values[start:idx+1]) / (idx+1 - start)
+        cur_avg = sum(values[start:end])/(end-start)
+        if pre_avg is None:
+            pre_avg = cur_avg
+            continue
 
         if cur_avg >= pre_avg:
             cur_increase = True
         else:
             cur_increase = False
+
         if pre_increase is None:
             pre_increase = cur_increase
+            continue
 
         if cur_increase is not pre_increase:
             break
 
-        idx = idx + shift
+        idx = idx + pole_normal_window
 
     if cur_increase is not pre_increase:
         return
@@ -156,6 +272,59 @@ def check_long_value_type(detail: DataFrame, meta_data: {}) -> list:
         meta_data[DebugKey.STOCK_TYPE] = StockType.DISCARD
         meta_data[DebugKey.DISCARD_REASON] = DiscardReason.SHORT_SELLING
 
+
+# return: list of pair(idx, poletype)
+def candidate_pole(detail: DataFrame) -> list:
+    # todo:magic
+    pole_least_window = 7
+
+    candidates = []
+
+    # todo: need to consider consolidation
+    shift = pole_least_window/2
+    for idx in range(shift, len(detail)-shift):
+        idx_p = detail.iloc[idx][Const.SMOOTH_KEY.name]
+
+        is_low = True
+        is_high = True
+        i = 1
+        while i <= shift:
+            if is_low is False and is_high is False:
+                break
+
+            if is_low and (detail.iloc[idx - i][Const.SMOOTH_KEY.name] <= idx_p or
+                             detail.iloc[idx + i][Const.SMOOTH_KEY.name] <= idx_p):
+                is_low = False
+
+            if is_high and (detail.iloc[idx - i][Const.SMOOTH_KEY.name] >= idx_p or
+                              detail.iloc[idx + i][Const.SMOOTH_KEY.name] >= idx_p):
+                is_high = False
+
+            i += 1
+
+        if is_low == is_high:
+            continue
+
+        pole_type = None
+        if is_low:
+            pole_type = PoleType.LOW
+        if is_high:
+            pole_type = PoleType.HIGH
+        candidates.append((idx, pole_type))
+
+    return candidates
+
+
+def is_consolidation(line:str):
+    return False
+
+
+# principal is to check line angels between three neighboring poles a,b,c
+# consolidation mode: -10(t1, can be tuned) < angle(a,b) < 10(t1), then
+#   if -t2 < angle(b,c) < -90, then high pole
+#   if t2 < angle(b,c) < 90, then low pole
+#   if -t2 < angle(b,c) < t2, then continue consolidation
+#   where t2 > 0
 
 # increase mode: t1 < angle(a,b) < 90, then
 #   if -t2 < angle(b,c) < -90, then high pole
@@ -198,7 +367,7 @@ def is_market_trade_increase():
     return True
 
 
-def check_interval(intervals: list, changes: list):
+def check_discard(intervals: list, changes: list):
     avg_interval = sum(intervals) / len(intervals)
     avg_change = sum(changes) / len(changes)
 
@@ -211,7 +380,7 @@ def check_interval(intervals: list, changes: list):
         return DiscardReason.POLES_CHANGE_TOO_SMALL
 
 
-def do_check_type(poles: list, detail: DataFrame):
+def get_discard_type(poles: list, detail: DataFrame):
 
     if len(poles) < 3:
         return DiscardReason.TOO_LITTLE_POLES
@@ -256,7 +425,7 @@ def do_check_type(poles: list, detail: DataFrame):
                            detail.iloc[poles[idx+1][0]][Const.SMOOTH_KEY.name]) /
                        detail.iloc[poles[idx][0]][Const.SMOOTH_KEY.name])
 
-    discard_type = check_interval(intervals, changes)
+    discard_type = check_discard(intervals, changes)
     if discard_type is not DiscardReason.NONE:
         return discard_type
 
@@ -269,11 +438,30 @@ def do_check_type(poles: list, detail: DataFrame):
                            detail.iloc[poles[idx+1][0]][Const.SMOOTH_KEY.name]) /
                        detail.iloc[poles[idx][0]][Const.SMOOTH_KEY.name])
 
-    discard_type = check_interval(intervals, changes)
+    discard_type = check_discard(intervals, changes)
     if discard_type is not DiscardReason.NONE:
         return discard_type
 
     return DiscardReason.NONE
+
+
+# return dataframe rows with pole type value
+def find_poles(detail: DataFrame, meta_data: {}) -> list:
+    poles = candidate_pole2(detail, meta_data)
+
+    # remove_fake(poles, detail)
+
+    return poles
+
+
+def savgol_smooth(detail: DataFrame):
+    # todo: tune
+    orig = detail['close']
+
+    # todo: tune
+    smooth = savgol_filter(orig.values, 5, 3)
+
+    detail[Const.SMOOTH_KEY.name] = smooth.tolist()
 
 
 def smooth_values(detail: DataFrame, in_size: int):
@@ -301,8 +489,21 @@ def smooth_values(detail: DataFrame, in_size: int):
 # todo:
 # poles: list of pair
 def check_stock_type(poles: list, detail: DataFrame, meta_data: {}) -> StockType:
+    # 判断是否为价值股
+    high_cnt = 0
+    low_cnt = 0
+    for pole in poles:
+        if pole[1] is PoleType.HIGH:
+            high_cnt += 1
+        else:
+            low_cnt += 1
 
-    discard_reason = do_check_type(poles, detail)
+    # 价值股
+    if low_cnt == 0 and high_cnt == 0:
+        meta_data[DebugKey.STOCK_TYPE] = StockType.LONG_VALUE
+        return
+
+    discard_reason = get_discard_type(poles, detail)
     if discard_reason is not DiscardReason.NONE:
         meta_data[DebugKey.DISCARD_REASON] = discard_reason
         meta_data[DebugKey.STOCK_TYPE] = StockType.DISCARD
@@ -324,6 +525,7 @@ def stock_analysis(stock_detail: DataFrame, meta_data: {}):
     smooth_values(stock_detail, 5)
     # smooth_values(stock_detail, 3)
 
+
     poles = find_poles(stock_detail, meta_data)
 
     check_stock_type(poles, stock_detail, meta_data)
@@ -343,6 +545,31 @@ def date_diff(d1: str, d2: str):
     timestamp_day2 = int(time.mktime(time_array2))
     result = (timestamp_day1 - timestamp_day2) // 60 // 60 // 24
     return result
+
+
+def get_new_int_value(origin: float, base: float):
+    return int(origin-base)
+
+
+# x is array type
+# y is list of pair(data array, label name) for multiple lines drawing
+def show_graph(title: str, x, y: list):
+    colors = ['green', 'red', 'blue', 'yellow', 'black']
+    fig = plt.figure(1)
+    plt.rcParams['font.sans-serif'] = ['SimHei']  # used to display chinese
+    plt.title(title)
+
+    plt.ylabel('y')
+    plt.xlabel('x')
+
+    for i in range(0, len(y)):
+        p = y[i]
+        color = colors[i]
+        plt.plot(x, p[0], color=color, label=p[1])
+
+    plt.draw()
+    plt.pause(100)  # display interval before disappear
+    plt.close(fig)
 
 
 def show_graph_pole(detail: DataFrame, poles: list, meta_data: {}):
@@ -383,7 +610,6 @@ def show_kline_graph(detail: DataFrame, meta_data: {}):
     if st is not StockType.DISCARD:
         mpf.plot(detail, type='candle', mav=3, volume=False, title=title)
     # mpf.plot(detail, type='candle', mav=3, volume=False, title=title)
-
 
 # ['ts_code', 'trade_date', 'open', 'high', 'low', 'close', 'pre_close', 'change', 'pct_chg', 'vol', 'amount']
 def is_sharp(stock_detail: DataFrame):

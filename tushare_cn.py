@@ -45,24 +45,32 @@ def sub_find(sub_stocks: DataFrame, stat: {}):
         if ts_code not in keys:
             continue
 
+        # # for debug
+        # if str(ts_code) != '000006.SZ':
+        #     continue
+
         detail = detail_map.get_group(ts_code)
         # sort by trade date and reindex
         detail = detail.sort_values(by='trade_date')
         new_detail = detail.reset_index()
 
         meta_data = {}
-        st = lib.stock_analysis(new_detail, meta_data)
-        if stat.get(meta_data[DebugKey.DISCARD_REASON]) is None:
-            stat[meta_data[DebugKey.DISCARD_REASON]] = 0
-        stat[meta_data[DebugKey.DISCARD_REASON]] = stat.get(meta_data[DebugKey.DISCARD_REASON]) + 1
+        lib.stock_analysis(new_detail, meta_data)
+        st = meta_data[DebugKey.STOCK_TYPE]
 
-        if st != lib.StockType.BAND_INCREASE:
+        if st is lib.StockType.DISCARD:
+            if stat.get(meta_data[DebugKey.DISCARD_REASON]) is None:
+                stat[meta_data[DebugKey.DISCARD_REASON]] = 0
+            stat[meta_data[DebugKey.DISCARD_REASON]] = stat.get(meta_data[DebugKey.DISCARD_REASON]) + 1
             continue
+
+        if stat.get(st) is None:
+            stat[st] = 0
+        stat[st] += 1
 
         # todo: fix
         candidate = sub_stocks.loc[sub_stocks['ts_code'] == ts_code]
-        candidate['type'] = 'sharp'
-        print('\nsharp stock:')
+        candidate['type'] = st.name
         print(candidate)
         sub_candidates.append(candidate)
 
