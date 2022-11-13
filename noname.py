@@ -17,7 +17,8 @@ class StockType(Enum):
     BAND_INCREASE = 2,
     BAND_DECREASE = 3,
     BAND_CONSOLIDATION = 4,
-    LONG_VALUE = 5
+    LONG_VALUE = 5,
+    NONE = 6
 
 
 class DiscardReason(Enum):

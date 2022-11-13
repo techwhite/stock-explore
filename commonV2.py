@@ -7,8 +7,6 @@ from noname import *
 
 pd.set_option('mode.chained_assignment', None)
 
-# parameters
-
 # better not greater than 9
 pole_normal_window = 9
 # todo:magic, should be smaller at the begging or end?
@@ -21,7 +19,7 @@ shift_head = int(pole_head_window/2)
 point_interval_least = 4
 point_change_least = 0.13
 min_data_day = point_interval_least*4  # 股票历史数据 最小天数
-latest_pole_max_distinct = 5 # 最近的点不能太远
+latest_pole_max_distinct = 5  # 最近的点不能太远
 
 # used for is_sharp
 hot_vol_ratio = 3  # 最近hot_days平均交易量/历史平均交易量
@@ -117,7 +115,7 @@ def find_poles(detail: DataFrame, meta_data: {}) -> list:
     return candidates
 
 
-def check_long_value_type(detail: DataFrame, meta_data: {}) -> list:
+def check_long_value_type(detail: DataFrame, meta_data: {}) -> bool:
     values = detail[Const.SMOOTH_KEY.name]
     pre_increase = None
     cur_increase = None
@@ -147,7 +145,7 @@ def check_long_value_type(detail: DataFrame, meta_data: {}) -> list:
         idx = idx + shift
 
     if cur_increase is not pre_increase:
-        return
+        return False
 
     if cur_increase is True:
         meta_data[DebugKey.STOCK_TYPE] = StockType.LONG_VALUE
@@ -156,6 +154,7 @@ def check_long_value_type(detail: DataFrame, meta_data: {}) -> list:
         meta_data[DebugKey.STOCK_TYPE] = StockType.DISCARD
         meta_data[DebugKey.DISCARD_REASON] = DiscardReason.SHORT_SELLING
 
+    return True
 
 # increase mode: t1 < angle(a,b) < 90, then
 #   if -t2 < angle(b,c) < -90, then high pole
@@ -211,8 +210,7 @@ def check_interval(intervals: list, changes: list):
         return DiscardReason.POLES_CHANGE_TOO_SMALL
 
 
-def do_check_type(poles: list, detail: DataFrame):
-
+def basic_check(poles: list, detail: DataFrame):
     if len(poles) < 3:
         return DiscardReason.TOO_LITTLE_POLES
 
@@ -222,6 +220,9 @@ def do_check_type(poles: list, detail: DataFrame):
         # todo: fix to not discard type when ready
         # todo: return stocktype = short_selling
         return DiscardReason.SHORT_SELLING
+
+
+def basic_check2(poles: list, detail: DataFrame):
 
     date = detail.iloc[poles[-1][0]]['trade_date']
     date_dist = dict()
@@ -237,6 +238,10 @@ def do_check_type(poles: list, detail: DataFrame):
     # if is_market_increase and tp == PoleType.HIGH or is_market_increase is False and tp == PoleType.LOW:
     #     return DiscardReason.INVERSE_MARKET
 
+    return DiscardReason.NONE
+
+
+def band_check(poles: list, detail: DataFrame):
     # trade date should cross between high/low points
     pre_pt = poles[0][1]
     for idx in range(1, len(poles)):
@@ -249,11 +254,11 @@ def do_check_type(poles: list, detail: DataFrame):
     # todo: optimize
     intervals = []
     changes = []
-    for idx in range(0, len(poles)-1, 2):
+    for idx in range(0, len(poles) - 1, 2):
         intervals.append(date_diff(detail.iloc[poles[idx][0]]['trade_date'],
-                                   detail.iloc[poles[idx+1][0]]['trade_date']))
+                                   detail.iloc[poles[idx + 1][0]]['trade_date']))
         changes.append(abs(detail.iloc[poles[idx][0]][Const.SMOOTH_KEY.name] -
-                           detail.iloc[poles[idx+1][0]][Const.SMOOTH_KEY.name]) /
+                           detail.iloc[poles[idx + 1][0]][Const.SMOOTH_KEY.name]) /
                        detail.iloc[poles[idx][0]][Const.SMOOTH_KEY.name])
 
     discard_type = check_interval(intervals, changes)
@@ -264,9 +269,9 @@ def do_check_type(poles: list, detail: DataFrame):
     changes.clear()
     for idx in range(1, len(poles) - 1, 2):
         intervals.append(date_diff(detail.iloc[poles[idx][0]]['trade_date'],
-                                   detail.iloc[poles[idx+1][0]]['trade_date']))
+                                   detail.iloc[poles[idx + 1][0]]['trade_date']))
         changes.append(abs(detail.iloc[poles[idx][0]][Const.SMOOTH_KEY.name] -
-                           detail.iloc[poles[idx+1][0]][Const.SMOOTH_KEY.name]) /
+                           detail.iloc[poles[idx + 1][0]][Const.SMOOTH_KEY.name]) /
                        detail.iloc[poles[idx][0]][Const.SMOOTH_KEY.name])
 
     discard_type = check_interval(intervals, changes)
@@ -298,17 +303,36 @@ def smooth_values(detail: DataFrame, in_size: int):
         detail.loc[idx, Const.SMOOTH_KEY.name] = idx_p + (avg-idx_p)/2
 
 
-# todo:
 # poles: list of pair
 def check_stock_type(poles: list, detail: DataFrame, meta_data: {}) -> StockType:
 
-    discard_reason = do_check_type(poles, detail)
+    is_long_value = check_long_value_type(detail, meta_data)
+    if is_long_value is True:
+        return
+
+    #  too little poles or short selling
+    discard_reason = basic_check(poles, detail)
     if discard_reason is not DiscardReason.NONE:
         meta_data[DebugKey.DISCARD_REASON] = discard_reason
         meta_data[DebugKey.STOCK_TYPE] = StockType.DISCARD
         return
 
-    meta_data[DebugKey.STOCK_TYPE] = StockType.BAND_INCREASE
+    #  too far
+    discard_reason = basic_check2(poles, detail)
+    if discard_reason is not DiscardReason.NONE:
+        meta_data[DebugKey.DISCARD_REASON] = discard_reason
+        meta_data[DebugKey.STOCK_TYPE] = StockType.DISCARD
+        return
+
+    #  band check
+    discard_reason = band_check(poles, detail)
+    if discard_reason is not DiscardReason.NONE:
+        meta_data[DebugKey.DISCARD_REASON] = discard_reason
+        meta_data[DebugKey.STOCK_TYPE] = StockType.DISCARD
+        return
+
+    meta_data[DebugKey.STOCK_TYPE] = StockType.NONE
+    meta_data[DebugKey.DISCARD_REASON] = DiscardReason.NONE
 
 
 # ['ts_code', 'trade_date', 'open', 'high', 'low', 'close', 'pre_close', 'change', 'pct_chg', 'vol', 'amount']
@@ -327,11 +351,6 @@ def stock_analysis(stock_detail: DataFrame, meta_data: {}):
     poles = find_poles(stock_detail, meta_data)
 
     check_stock_type(poles, stock_detail, meta_data)
-
-    check_long_value_type(stock_detail, meta_data)
-
-    # if meta_data[DebugKey.STOCK_TYPE] is not StockType.DISCARD:
-    #     show_graph_pole(stock_detail, poles)
 
     show_graph_pole(stock_detail, poles, meta_data)
 
