@@ -8,7 +8,7 @@ from noname import *
 
 pd.set_option('mode.chained_assignment', None)
 
-history_days = 60  # 获取股票历史数据天数
+history_days = 80  # 获取股票历史数据天数
 batch_call_count = int(5000 * 0.2 / history_days)
 
 
@@ -20,11 +20,13 @@ pro = ts.pro_api('af70725c78bbeb6c166a104f735ecc0f62db1348a4b8533812621554')
 
 # batch call
 def do_query(ts_codes: str):
-    return pro.query('daily', ts_code=ts_codes, start_date=start_date, end_date=end_date)
+    # return pro.query('daily', ts_code=ts_codes, start_date=start_date, end_date=end_date)
+    return pro.daily(ts_code=ts_codes, start_date=start_date, end_date=end_date)
+    # return pro.weekly(ts_code=ts_codes, start_date=start_date, end_date=end_date)
 
 
 # sub find
-def sub_find(sub_stocks: DataFrame, stat: {}):
+def sub_find(sub_stocks: DataFrame, reason_stat: {}) -> {}:
     code_list = sub_stocks['ts_code'].tolist()
     ts_codes = ','.join(code_list)
 
@@ -36,7 +38,7 @@ def sub_find(sub_stocks: DataFrame, stat: {}):
     # 输出
     # detail_map.apply(print)
 
-    sub_candidates = []
+    sub_candidates = {}
     for ts_code in code_list:
         if str(ts_code).startswith('3'):
             # 创业板暂不支持
@@ -59,30 +61,25 @@ def sub_find(sub_stocks: DataFrame, stat: {}):
         st = meta_data[DebugKey.STOCK_TYPE]
 
         if st is lib.StockType.DISCARD:
-            if stat.get(meta_data[DebugKey.DISCARD_REASON]) is None:
-                stat[meta_data[DebugKey.DISCARD_REASON]] = 0
-            stat[meta_data[DebugKey.DISCARD_REASON]] = stat.get(meta_data[DebugKey.DISCARD_REASON]) + 1
+            if reason_stat.get(meta_data[DebugKey.DISCARD_REASON]) is None:
+                reason_stat[meta_data[DebugKey.DISCARD_REASON]] = 0
+            reason_stat[meta_data[DebugKey.DISCARD_REASON]] = reason_stat.get(meta_data[DebugKey.DISCARD_REASON]) + 1
             continue
-
-        if stat.get(st) is None:
-            stat[st] = 0
-        stat[st] += 1
 
         # todo: fix
         candidate = sub_stocks.loc[sub_stocks['ts_code'] == ts_code]
         candidate['type'] = st.name
-        print(candidate)
-        sub_candidates.append(candidate)
+        sub_candidates[meta_data[DebugKey.SORT_SCORE]] = candidate
 
     return sub_candidates
 
 
 def find():
     stocks = pro.stock_basic(exchange='', list_status='L', fields='ts_code,symbol,name,area,industry,list_date')
-    candiates = []
+    candiates = {}
 
-    # stat
-    stat = {}
+    # reason_stat
+    reason_stat = {}
 
     length = len(stocks)
     idx = 0
@@ -92,15 +89,17 @@ def find():
             end_idx = length
 
         sub_stocks = stocks[idx:end_idx]
-        sub_candiates = sub_find(sub_stocks, stat)
+        sub_candiates = sub_find(sub_stocks, reason_stat)
         if len(sub_candiates) != 0:
-            candiates += sub_candiates
+            candiates = {**sub_candiates, **candiates}
 
         idx = end_idx
 
-    print(stat)
+    print(reason_stat)
 
-    return candiates
+    # sort by score
+    print(candiates)
+    return sorted(candiates.items(), reverse=True)
 
 
 if __name__ == '__main__':

@@ -1,5 +1,6 @@
 import mplfinance as mpf
 import time
+import numpy as np
 from pandas import DataFrame
 import pandas as pd
 from noname import *
@@ -16,9 +17,12 @@ shift_normal = int(pole_normal_window/2)
 shift_tail = int(pole_tail_window/2)
 shift_head = int(pole_head_window/2)
 
-point_interval_least = 4
-point_change_least = 0.13
-min_data_day = point_interval_least*4  # 股票历史数据 最小天数
+# todo： magic
+CONSOLIDATION_DAYS_LEAST = 14
+CONSOLIDATION_CHANGE_RATIO_LEAST = 0.01
+CHANGE_DAYS_LEAST = 5
+CHANGE_RATIO_LEAST = 0.15
+min_data_day = CHANGE_DAYS_LEAST*4  # 股票历史数据 最小天数
 latest_pole_max_distinct = 5  # 最近的点不能太远
 
 # used for is_sharp
@@ -115,7 +119,9 @@ def find_poles(detail: DataFrame, meta_data: {}) -> list:
     return candidates
 
 
-def check_long_value_type(detail: DataFrame, meta_data: {}) -> bool:
+# 固定窗口寻找，判断前一个窗口和当前窗口平均值，决定趋势
+# 判断相邻两个趋势是否相同，若一直相同，则为长期增长或下降股票。否则为波动股
+def is_long_value_type(detail: DataFrame, meta_data: {}) -> bool:
     values = detail[Const.SMOOTH_KEY.name]
     pre_increase = None
     cur_increase = None
@@ -151,8 +157,7 @@ def check_long_value_type(detail: DataFrame, meta_data: {}) -> bool:
         meta_data[DebugKey.STOCK_TYPE] = StockType.LONG_VALUE
     else:
         # todo: change to long value decrease type in future
-        meta_data[DebugKey.STOCK_TYPE] = StockType.DISCARD
-        meta_data[DebugKey.DISCARD_REASON] = DiscardReason.SHORT_SELLING
+        return False
 
     return True
 
@@ -197,32 +202,62 @@ def is_market_trade_increase():
     return True
 
 
-def check_interval(intervals: list, changes: list):
+def is_high_quality(intervals: list, changes: list, meta_data: {}) -> bool:
     avg_interval = sum(intervals) / len(intervals)
     avg_change = sum(changes) / len(changes)
 
     # 相比值变化，不是那么重要。但也要有底线值
-    if avg_interval < point_interval_least:
-        return DiscardReason.POLES_INTERVAL_TOO_SMALL
+    if avg_interval < CHANGE_DAYS_LEAST:
+        # meta_data[DebugKey.DISCARD_REASON] = DiscardReason.POLES_INTERVAL_TOO_SMALL
+        return False
 
     # 高低点之间的变动不能太小
-    if avg_change < point_change_least:
-        return DiscardReason.POLES_CHANGE_TOO_SMALL
+    if avg_change < CHANGE_RATIO_LEAST:
+        # meta_data[DebugKey.DISCARD_REASON] = DiscardReason.POLES_CHANGE_TOO_SMALL
+        return False
+
+    return True
 
 
-def basic_check(poles: list, detail: DataFrame):
+def is_low_quality(intervals: list, changes: list, meta_data: {}) -> bool:
+    avg_interval = sum(intervals) / len(intervals)
+    avg_change = sum(changes) / len(changes)
+
+    # 相比值变化，不是那么重要。但也要有底线值
+    if avg_interval < CHANGE_DAYS_LEAST:
+        meta_data[DebugKey.DISCARD_REASON] = DiscardReason.POLES_INTERVAL_TOO_SMALL
+        return True
+
+    # 高低点之间的变动不能太小
+    if avg_change < CHANGE_RATIO_LEAST:
+        meta_data[DebugKey.DISCARD_REASON] = DiscardReason.POLES_CHANGE_TOO_SMALL
+        return True
+
+    return False
+
+
+def is_too_little_count(poles: list, meta_data: {}) -> bool:
+    # todo: magic number
     if len(poles) < 3:
-        return DiscardReason.TOO_LITTLE_POLES
+        meta_data[DebugKey.DISCARD_REASON] = DiscardReason.TOO_LITTLE_POLES
+        return True
+
+    return False
+
+
+def is_short_selling(poles: list, meta_data: {}) -> bool:
 
     # latest pole & 做空
     pt = poles[-1][1]
     if pt is PoleType.HIGH:
         # todo: fix to not discard type when ready
         # todo: return stocktype = short_selling
-        return DiscardReason.SHORT_SELLING
+        meta_data[DebugKey.DISCARD_REASON] = DiscardReason.SHORT_SELLING
+        return True
+    return False
 
 
-def basic_check2(poles: list, detail: DataFrame):
+def is_too_far(poles: list, detail: DataFrame, meta_data: {}) -> bool:
 
     date = detail.iloc[poles[-1][0]]['trade_date']
     date_dist = dict()
@@ -232,25 +267,48 @@ def basic_check2(poles: list, detail: DataFrame):
 
     # 最近一个点离现在太远了
     if date_dist[date] > latest_pole_max_distinct:
-        return DiscardReason.TOO_FAR
+        meta_data[DebugKey.DISCARD_REASON] = DiscardReason.TOO_FAR
+        return True
 
     # is_market_increase = is_market_trade_increase()
     # if is_market_increase and tp == PoleType.HIGH or is_market_increase is False and tp == PoleType.LOW:
     #     return DiscardReason.INVERSE_MARKET
 
-    return DiscardReason.NONE
+    return False
 
 
-def band_check(poles: list, detail: DataFrame):
+def is_not_cross_poles(poles: list, meta_data: {}) -> bool:
     # trade date should cross between high/low points
     pre_pt = poles[0][1]
     for idx in range(1, len(poles)):
         pt = poles[idx][1]
         if pt == pre_pt:
-            return DiscardReason.SAME_ALIGN_POLES
+            meta_data[DebugKey.DISCARD_REASON] = DiscardReason.SAME_ALIGN_POLES
+            return True
 
         pre_pt = pt
+    return False
 
+
+# 后面的波段是低质量的：涨幅不大或者持续天数不多。用（p2，p1）的历史值来预测下一波段，不一定靠谱
+def is_low_quality_stock(poles: list, detail: DataFrame, meta_data: {}) -> bool:
+    intervals = []
+    changes = []
+    for idx in range(1, len(poles) - 1, 2):
+        intervals.append(date_diff(detail.iloc[poles[idx][0]]['trade_date'],
+                                   detail.iloc[poles[idx+1][0]]['trade_date']))
+        changes.append(abs(detail.iloc[poles[idx][0]][Const.SMOOTH_KEY.name] -
+                           detail.iloc[poles[idx+1][0]][Const.SMOOTH_KEY.name]) /
+                       detail.iloc[poles[idx+1][0]][Const.SMOOTH_KEY.name])
+
+    if is_low_quality(intervals, changes, meta_data) is True:
+        return True
+
+    return False
+
+
+# 判断是否为波段股：波段长度和改变大小都是在相对平稳的值
+def is_high_quality_stock(poles: list, detail: DataFrame, meta_data: {}) -> bool:
     # todo: optimize
     intervals = []
     changes = []
@@ -261,9 +319,8 @@ def band_check(poles: list, detail: DataFrame):
                            detail.iloc[poles[idx + 1][0]][Const.SMOOTH_KEY.name]) /
                        detail.iloc[poles[idx][0]][Const.SMOOTH_KEY.name])
 
-    discard_type = check_interval(intervals, changes)
-    if discard_type is not DiscardReason.NONE:
-        return discard_type
+    if is_high_quality(intervals, changes, meta_data) is not True:
+        return False
 
     intervals.clear()
     changes.clear()
@@ -274,11 +331,10 @@ def band_check(poles: list, detail: DataFrame):
                            detail.iloc[poles[idx + 1][0]][Const.SMOOTH_KEY.name]) /
                        detail.iloc[poles[idx][0]][Const.SMOOTH_KEY.name])
 
-    discard_type = check_interval(intervals, changes)
-    if discard_type is not DiscardReason.NONE:
-        return discard_type
+    if is_high_quality(intervals, changes, meta_data) is not True:
+        return False
 
-    return DiscardReason.NONE
+    return True
 
 
 def smooth_values(detail: DataFrame, in_size: int):
@@ -303,36 +359,105 @@ def smooth_values(detail: DataFrame, in_size: int):
         detail.loc[idx, Const.SMOOTH_KEY.name] = idx_p + (avg-idx_p)/2
 
 
+# 盘整股，突然上涨
+def is_consolidate_increase(poles: list, detail: DataFrame, meta_data: {}) -> bool:
+    if len(poles) < 3:
+        return False
+
+    date_1 = detail.iloc[poles[-1][0]]['trade_date']
+    date_2 = detail.iloc[poles[-2][0]]['trade_date']
+    interval = abs(date_diff(date_1, date_2))
+
+    price_1 = detail.iloc[poles[-1][0]][Const.SMOOTH_KEY.name]
+    price_2 = detail.iloc[poles[-2][0]][Const.SMOOTH_KEY.name]
+    avg_price2_1 = sum(detail.iloc[poles[-2][0]:poles[-1][0]][Const.SMOOTH_KEY.name])/(poles[-2][0]-poles[-1][0])
+    avg_diff = (abs(avg_price2_1-price_2)+abs(avg_price2_1-price_1))/2
+
+    # todo: magic number. 平均值
+    if avg_diff/avg_price2_1 < CONSOLIDATION_CHANGE_RATIO_LEAST \
+            and interval > CONSOLIDATION_DAYS_LEAST:
+        return True
+
+    return False
+
+
+# 阶段性回落，又增长。但整体趋势是上涨的
+def is_phased_increase(poles: list, detail: DataFrame, meta_data: {}) -> bool:
+    if len(poles) < 4:
+        return False
+
+    price_1 = detail.iloc[poles[-1][0]][Const.SMOOTH_KEY.name]
+    price_2 = detail.iloc[poles[-2][0]][Const.SMOOTH_KEY.name]
+    price_3 = detail.iloc[poles[-3][0]][Const.SMOOTH_KEY.name]
+    price_4 = detail.iloc[poles[-4][0]][Const.SMOOTH_KEY.name]
+
+    # todo: magic number. 1.2越大，升的越快
+    if price_1 > price_3 * 1.2 and price_2 > price_4 * 1.2:
+        return True
+
+    return False
+
+
 # poles: list of pair
-def check_stock_type(poles: list, detail: DataFrame, meta_data: {}) -> StockType:
+def check_stock_type(poles: list, detail: DataFrame, meta_data: {}) -> bool:
 
-    is_long_value = check_long_value_type(detail, meta_data)
-    if is_long_value is True:
+    if is_long_value_type(detail, meta_data):
+        meta_data[DebugKey.STOCK_TYPE] = StockType.LONG_VALUE
         return
 
-    #  too little poles or short selling
-    discard_reason = basic_check(poles, detail)
-    if discard_reason is not DiscardReason.NONE:
-        meta_data[DebugKey.DISCARD_REASON] = discard_reason
+    if is_too_little_count(poles, meta_data) \
+            or is_too_far(poles, detail, meta_data) \
+            or is_short_selling(poles, meta_data) \
+            or is_not_cross_poles(poles, meta_data):  # keep?
         meta_data[DebugKey.STOCK_TYPE] = StockType.DISCARD
         return
 
-    #  too far
-    discard_reason = basic_check2(poles, detail)
-    if discard_reason is not DiscardReason.NONE:
-        meta_data[DebugKey.DISCARD_REASON] = discard_reason
+    # # 做多时不用判断
+    # if is_low_quality_stock(poles, detail, meta_data):
+    #     meta_data[DebugKey.STOCK_TYPE] = StockType.DISCARD
+    #     return
+
+    # 做空时不用判断
+    if is_low_quality_stock(poles, detail, meta_data):
         meta_data[DebugKey.STOCK_TYPE] = StockType.DISCARD
         return
 
-    #  band check
-    discard_reason = band_check(poles, detail)
-    if discard_reason is not DiscardReason.NONE:
-        meta_data[DebugKey.DISCARD_REASON] = discard_reason
-        meta_data[DebugKey.STOCK_TYPE] = StockType.DISCARD
+    if is_phased_increase(poles, detail, meta_data):
+        meta_data[DebugKey.STOCK_TYPE] = StockType.PHASED_INCREASE
         return
 
-    meta_data[DebugKey.STOCK_TYPE] = StockType.NONE
+    if is_consolidate_increase(poles, detail, meta_data):
+        meta_data[DebugKey.STOCK_TYPE] = StockType.CONSOLIDATION_INCREASE
+        return
+
+    meta_data[DebugKey.STOCK_TYPE] = StockType.DISCARD
     meta_data[DebugKey.DISCARD_REASON] = DiscardReason.NONE
+
+
+def compute_score(detail: DataFrame, poles: list, meta_data: {}):
+    if meta_data[DebugKey.STOCK_TYPE] is StockType.DISCARD:
+        return
+
+    # todo: magic number
+    start = len(detail)-14
+    if len(poles) == 2:
+        start = poles[-2][0]-abs(poles[-1][0]-poles[-2][0])
+    if len(poles) == 3:
+        start = poles[-3][0]
+    if start < 0:
+        start = 0
+
+    diffs = []
+    for index in range(start+1, len(detail)):
+        price_next = detail.iloc[index][Const.SMOOTH_KEY.name]
+        price_before = detail.iloc[index-1][Const.SMOOTH_KEY.name]
+        diffs.append(abs(price_before-price_next))
+
+    avg = np.mean(diffs)
+    var = np.var(diffs)
+
+    score = avg / var
+    meta_data[DebugKey.SORT_SCORE] = score
 
 
 # ['ts_code', 'trade_date', 'open', 'high', 'low', 'close', 'pre_close', 'change', 'pct_chg', 'vol', 'amount']
@@ -354,6 +479,8 @@ def stock_analysis(stock_detail: DataFrame, meta_data: {}):
 
     show_graph_pole(stock_detail, poles, meta_data)
 
+    compute_score(stock_detail, poles, meta_data)
+
 
 def date_diff(d1: str, d2: str):
     time_array1 = time.strptime(d1, "%Y%m%d")
@@ -361,7 +488,7 @@ def date_diff(d1: str, d2: str):
     time_array2 = time.strptime(d2, "%Y%m%d")
     timestamp_day2 = int(time.mktime(time_array2))
     result = (timestamp_day1 - timestamp_day2) // 60 // 60 // 24
-    return result
+    return abs(result)
 
 
 def show_graph_pole(detail: DataFrame, poles: list, meta_data: {}):
@@ -397,10 +524,16 @@ def show_kline_graph(detail: DataFrame, meta_data: {}):
 
     detail['Date'] = pd.to_datetime(detail['Date'])
     detail.set_index("Date", inplace=True)
-    # mpf.plot(detail, type='candle', mav=(3, 6, 9), volume=True, title=ts_code)
-    # if discard_reason is not DiscardReason.TOO_SHORT_DAY_DATA:
-    if st is not StockType.DISCARD:
-        mpf.plot(detail, type='candle', mav=3, volume=False, title=title)
+
+    # debug for one ts_code
+    # if ts_code == '000630.SZ':
+    #     mpf.plot(detail, type='candle', mav=(3, 6, 9), volume=True, title=ts_code)
+
+    # debug for candidate
+    # if st is not StockType.DISCARD:
+    #     mpf.plot(detail, type='candle', mav=3, volume=False, title=title)
+
+    # debug for all
     # mpf.plot(detail, type='candle', mav=3, volume=False, title=title)
 
 

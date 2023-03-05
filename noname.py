@@ -9,6 +9,7 @@ class DebugKey(Enum):
     SCORE = 0,
     DISCARD_REASON = 1,
     STOCK_TYPE = 2,
+    SORT_SCORE = 3
 
 
 class StockType(Enum):
@@ -16,9 +17,10 @@ class StockType(Enum):
     SHARP = 1,
     BAND_INCREASE = 2,
     BAND_DECREASE = 3,
-    BAND_CONSOLIDATION = 4,
+    CONSOLIDATION_INCREASE = 4,
     LONG_VALUE = 5,
-    NONE = 6
+    PHASED_INCREASE = 6,
+    NONE = 100
 
 
 class DiscardReason(Enum):
