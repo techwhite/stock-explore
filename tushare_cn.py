@@ -47,10 +47,6 @@ def sub_find(sub_stocks: DataFrame, reason_stat: {}) -> {}:
         if ts_code not in keys:
             continue
 
-        # # for debug
-        # if str(ts_code) != '000006.SZ':
-        #     continue
-
         detail = detail_map.get_group(ts_code)
         # sort by trade date and reindex
         detail = detail.sort_values(by='trade_date')
@@ -96,9 +92,9 @@ def find():
         idx = end_idx
 
     print(reason_stat)
+    print()
 
     # sort by score
-    print(candiates)
     return sorted(candiates.items(), reverse=True)
 
 

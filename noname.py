@@ -20,6 +20,7 @@ class StockType(Enum):
     CONSOLIDATION_INCREASE = 4,
     LONG_VALUE = 5,
     PHASED_INCREASE = 6,
+    TURN_INCREASE = 7,
     NONE = 100
 
 

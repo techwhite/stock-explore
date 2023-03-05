@@ -5,24 +5,32 @@ from pandas import DataFrame
 import pandas as pd
 from noname import *
 
-
 pd.set_option('mode.chained_assignment', None)
+
+# 指定一个或多个stocktype类型，如[StockType.CONSOLIDATION_INCREASE]
+DEBUG_STOCK_TYPE = [StockType.TURN_INCREASE, StockType.CONSOLIDATION_INCREASE]
+# 指定一个或多个ts_code( ex. ['00000.SZ'] )
+DEBUG_CODE = []
+# 是否全部打开debug
+DEBUG_ALL = False
 
 # better not greater than 9
 pole_normal_window = 9
 # todo:magic, should be smaller at the begging or end?
 pole_tail_window = 3
 pole_head_window = 5
-shift_normal = int(pole_normal_window/2)
-shift_tail = int(pole_tail_window/2)
-shift_head = int(pole_head_window/2)
+shift_normal = int(pole_normal_window / 2)
+shift_tail = int(pole_tail_window / 2)
+shift_head = int(pole_head_window / 2)
 
 # todo： magic
-CONSOLIDATION_DAYS_LEAST = 14
-CONSOLIDATION_CHANGE_RATIO_LEAST = 0.01
+CONSOLIDATION_DAYS_LEAST = 21
+CONSOLIDATION_CHANGE_RATIO_LEAST = 0.05
+TURN_DAYS_LEAST = 14
+TURN_CHANGE_RATIO_LEAST = 1.1  # 下降20%
 CHANGE_DAYS_LEAST = 5
 CHANGE_RATIO_LEAST = 0.15
-min_data_day = CHANGE_DAYS_LEAST*4  # 股票历史数据 最小天数
+min_data_day = CHANGE_DAYS_LEAST * 4  # 股票历史数据 最小天数
 latest_pole_max_distinct = 5  # 最近的点不能太远
 
 # used for is_sharp
@@ -35,7 +43,6 @@ hot_days = 3  # 保证大于2，最近几天交易量大增，价格上涨
 # 并记录最大值或最小值。若当前趋势和前一个窗口的趋势相同，则继续移动；若不同，则到达了峰点或谷底，寻找成功
 # return dataframe rows with pole type value
 def find_poles(detail: DataFrame, meta_data: {}) -> list:
-
     candidates = []
 
     # todo: need to consider consolidation
@@ -51,10 +58,10 @@ def find_poles(detail: DataFrame, meta_data: {}) -> list:
     shift = shift_head
     while idx < len(detail):
 
-        start = idx-shift
+        start = idx - shift
         if start < 0:
             start = 0
-        end = idx+shift+1
+        end = idx + shift + 1
         if end > len(detail):
             end = len(detail)
 
@@ -70,9 +77,9 @@ def find_poles(detail: DataFrame, meta_data: {}) -> list:
                 cur_min = values[i]
                 cur_min_idx = i
 
-        cur_avg = sum(values[idx:end])/(end-idx)
+        cur_avg = sum(values[idx:end]) / (end - idx)
         # if pre_avg is None:
-        pre_avg = sum(values[start:idx+1])/(idx+1-start)
+        pre_avg = sum(values[start:idx + 1]) / (idx + 1 - start)
 
         if cur_avg > pre_avg:
             cur_increase = True
@@ -136,7 +143,7 @@ def is_long_value_type(detail: DataFrame, meta_data: {}) -> bool:
             end = len(detail)
 
         cur_avg = sum(values[idx:end]) / (end - idx)
-        pre_avg = sum(values[start:idx+1]) / (idx+1 - start)
+        pre_avg = sum(values[start:idx + 1]) / (idx + 1 - start)
 
         if cur_avg >= pre_avg:
             cur_increase = True
@@ -161,6 +168,7 @@ def is_long_value_type(detail: DataFrame, meta_data: {}) -> bool:
 
     return True
 
+
 # increase mode: t1 < angle(a,b) < 90, then
 #   if -t2 < angle(b,c) < -90, then high pole
 # decrease mode: -t1 < angle(a,b) < -90, then
@@ -174,9 +182,9 @@ def remove_fake(poles: [], detail: DataFrame):
 
     new_poles = list()
     new_poles.append(poles[0])
-    for idx in range(1, len(poles)-1):
+    for idx in range(1, len(poles) - 1):
         current = detail.iloc[poles[idx][0]]
-        nxt = detail.iloc[poles[idx+1][0]]
+        nxt = detail.iloc[poles[idx + 1][0]]
         pre = detail.iloc[new_poles[-1][0]]
         angle_ab = get_angle_between_points(pre['trade_date'], pre[Const.SMOOTH_KEY.name],
                                             current['trade_date'], current[Const.SMOOTH_KEY.name])
@@ -246,7 +254,6 @@ def is_too_little_count(poles: list, meta_data: {}) -> bool:
 
 
 def is_short_selling(poles: list, meta_data: {}) -> bool:
-
     # latest pole & 做空
     pt = poles[-1][1]
     if pt is PoleType.HIGH:
@@ -258,12 +265,11 @@ def is_short_selling(poles: list, meta_data: {}) -> bool:
 
 
 def is_too_far(poles: list, detail: DataFrame, meta_data: {}) -> bool:
-
     date = detail.iloc[poles[-1][0]]['trade_date']
     date_dist = dict()
     for idx in range(0, len(detail)):
         dt = detail.iloc[idx]['trade_date']
-        date_dist[dt] = len(detail)-idx
+        date_dist[dt] = len(detail) - idx
 
     # 最近一个点离现在太远了
     if date_dist[date] > latest_pole_max_distinct:
@@ -296,10 +302,10 @@ def is_low_quality_stock(poles: list, detail: DataFrame, meta_data: {}) -> bool:
     changes = []
     for idx in range(1, len(poles) - 1, 2):
         intervals.append(date_diff(detail.iloc[poles[idx][0]]['trade_date'],
-                                   detail.iloc[poles[idx+1][0]]['trade_date']))
+                                   detail.iloc[poles[idx + 1][0]]['trade_date']))
         changes.append(abs(detail.iloc[poles[idx][0]][Const.SMOOTH_KEY.name] -
-                           detail.iloc[poles[idx+1][0]][Const.SMOOTH_KEY.name]) /
-                       detail.iloc[poles[idx+1][0]][Const.SMOOTH_KEY.name])
+                           detail.iloc[poles[idx + 1][0]][Const.SMOOTH_KEY.name]) /
+                       detail.iloc[poles[idx + 1][0]][Const.SMOOTH_KEY.name])
 
     if is_low_quality(intervals, changes, meta_data) is True:
         return True
@@ -338,47 +344,68 @@ def is_high_quality_stock(poles: list, detail: DataFrame, meta_data: {}) -> bool
 
 
 def smooth_values(detail: DataFrame, in_size: int):
-    detail[Const.SMOOTH_KEY.name] = (detail['close'] + detail['open'])/2
+    detail[Const.SMOOTH_KEY.name] = (detail['close'] + detail['open']) / 2
 
     shift = in_size / 2
     for idx in range(0, len(detail)):
         idx_p = detail.iloc[idx][Const.SMOOTH_KEY.name]
         left_n = 1
         left_sum = 0
-        while idx-left_n >= 0 and left_n <= shift:
-            left_sum += detail.iloc[idx-left_n][Const.SMOOTH_KEY.name]
+        while idx - left_n >= 0 and left_n <= shift:
+            left_sum += detail.iloc[idx - left_n][Const.SMOOTH_KEY.name]
             left_n += 1
 
         right_n = 1
         right_sum = 0
-        while idx+right_n < len(detail) and right_n <= shift:
-            right_sum += detail.iloc[idx+right_n][Const.SMOOTH_KEY.name]
+        while idx + right_n < len(detail) and right_n <= shift:
+            right_sum += detail.iloc[idx + right_n][Const.SMOOTH_KEY.name]
             right_n += 1
 
-        avg = (left_sum+right_sum)/(left_n+right_n-2)
-        detail.loc[idx, Const.SMOOTH_KEY.name] = idx_p + (avg-idx_p)/2
+        avg = (left_sum + right_sum) / (left_n + right_n - 2)
+        detail.loc[idx, Const.SMOOTH_KEY.name] = idx_p + (avg - idx_p) / 2
 
 
 # 盘整股，突然上涨
 def is_consolidate_increase(poles: list, detail: DataFrame, meta_data: {}) -> bool:
-    if len(poles) < 3:
+    if len(poles) < 2:
         return False
 
     date_1 = detail.iloc[poles[-1][0]]['trade_date']
     date_2 = detail.iloc[poles[-2][0]]['trade_date']
     interval = abs(date_diff(date_1, date_2))
+    if interval < CONSOLIDATION_DAYS_LEAST:
+        return False
 
     price_1 = detail.iloc[poles[-1][0]][Const.SMOOTH_KEY.name]
     price_2 = detail.iloc[poles[-2][0]][Const.SMOOTH_KEY.name]
-    avg_price2_1 = sum(detail.iloc[poles[-2][0]:poles[-1][0]][Const.SMOOTH_KEY.name])/(poles[-2][0]-poles[-1][0])
-    avg_diff = (abs(avg_price2_1-price_2)+abs(avg_price2_1-price_1))/2
+    sub = detail[Const.SMOOTH_KEY.name][poles[-2][0]:poles[-1][0]]
+    avg_price = np.mean(sub.values)
 
-    # todo: magic number. 平均值
-    if avg_diff/avg_price2_1 < CONSOLIDATION_CHANGE_RATIO_LEAST \
-            and interval > CONSOLIDATION_DAYS_LEAST:
-        return True
+    if abs(price_1 - avg_price)/avg_price > CONSOLIDATION_CHANGE_RATIO_LEAST and \
+            abs(price_2 - avg_price)/price_2 > CONSOLIDATION_CHANGE_RATIO_LEAST:
+        return False
+    # std = np.std(sub.values, ddof=1)  # 计算样本标准差
 
-    return False
+    return True
+
+
+# 盘整股，突然上涨
+def is_turn_increase(poles: list, detail: DataFrame, meta_data: {}) -> bool:
+    if len(poles) < 2:
+        return False
+
+    date_1 = detail.iloc[poles[-1][0]]['trade_date']
+    date_2 = detail.iloc[poles[-2][0]]['trade_date']
+    interval = abs(date_diff(date_1, date_2))
+    if interval < TURN_DAYS_LEAST:
+        return False
+
+    price_1 = detail.iloc[poles[-1][0]][Const.SMOOTH_KEY.name]
+    price_2 = detail.iloc[poles[-2][0]][Const.SMOOTH_KEY.name]
+    if price_2 < price_1 * TURN_CHANGE_RATIO_LEAST:
+        return
+
+    return True
 
 
 # 阶段性回落，又增长。但整体趋势是上涨的
@@ -400,7 +427,6 @@ def is_phased_increase(poles: list, detail: DataFrame, meta_data: {}) -> bool:
 
 # poles: list of pair
 def check_stock_type(poles: list, detail: DataFrame, meta_data: {}) -> bool:
-
     if is_long_value_type(detail, meta_data):
         meta_data[DebugKey.STOCK_TYPE] = StockType.LONG_VALUE
         return
@@ -430,6 +456,9 @@ def check_stock_type(poles: list, detail: DataFrame, meta_data: {}) -> bool:
         meta_data[DebugKey.STOCK_TYPE] = StockType.CONSOLIDATION_INCREASE
         return
 
+    if is_turn_increase(poles, detail, meta_data):
+        meta_data[DebugKey.STOCK_TYPE] = StockType.TURN_INCREASE
+
     meta_data[DebugKey.STOCK_TYPE] = StockType.DISCARD
     meta_data[DebugKey.DISCARD_REASON] = DiscardReason.NONE
 
@@ -438,20 +467,20 @@ def compute_score(detail: DataFrame, poles: list, meta_data: {}):
     if meta_data[DebugKey.STOCK_TYPE] is StockType.DISCARD:
         return
 
-    # todo: magic number
-    start = len(detail)-14
+    # TODO: magic number
+    start = len(detail) - 14
     if len(poles) == 2:
-        start = poles[-2][0]-abs(poles[-1][0]-poles[-2][0])
+        start = poles[-2][0] - abs(poles[-1][0] - poles[-2][0])
     if len(poles) == 3:
         start = poles[-3][0]
     if start < 0:
         start = 0
 
     diffs = []
-    for index in range(start+1, len(detail)):
+    for index in range(start + 1, len(detail)):
         price_next = detail.iloc[index][Const.SMOOTH_KEY.name]
-        price_before = detail.iloc[index-1][Const.SMOOTH_KEY.name]
-        diffs.append(abs(price_before-price_next))
+        price_before = detail.iloc[index - 1][Const.SMOOTH_KEY.name]
+        diffs.append(abs(price_before - price_next))
 
     avg = np.mean(diffs)
     var = np.var(diffs)
@@ -464,6 +493,12 @@ def compute_score(detail: DataFrame, poles: list, meta_data: {}):
 def stock_analysis(stock_detail: DataFrame, meta_data: {}):
     if len(stock_detail) < min_data_day:
         meta_data[DebugKey.DISCARD_REASON] = DiscardReason.TOO_SHORT_DAY_DATA
+        meta_data[DebugKey.STOCK_TYPE] = StockType.DISCARD
+        return
+
+    # for debug
+    ts_code = stock_detail.iloc[0]['ts_code']
+    if len(DEBUG_CODE) > 0 and str(ts_code) not in DEBUG_CODE:
         meta_data[DebugKey.STOCK_TYPE] = StockType.DISCARD
         return
 
@@ -517,7 +552,7 @@ def show_kline_graph(detail: DataFrame, meta_data: {}):
     st = meta_data[DebugKey.STOCK_TYPE]
     if st is StockType.DISCARD:
         discard_reason = meta_data[DebugKey.DISCARD_REASON]
-    title = str(ts_code)+str('|')+str(discard_reason)+str('|')+str(st)
+    title = str(ts_code) + str('|') + str(discard_reason) + str('|') + str(st)
 
     detail = detail.rename({'open': 'Open', 'close': 'Close', 'high': 'High', 'low': 'Low', 'trade_date': 'Date',
                             'vol': 'Volume'}, axis='columns')
@@ -526,15 +561,16 @@ def show_kline_graph(detail: DataFrame, meta_data: {}):
     detail.set_index("Date", inplace=True)
 
     # debug for one ts_code
-    # if ts_code == '000630.SZ':
-    #     mpf.plot(detail, type='candle', mav=(3, 6, 9), volume=True, title=ts_code)
+    if str(ts_code) in DEBUG_CODE:
+        mpf.plot(detail, type='candle', mav=(3, 6, 9), volume=True, title=ts_code)
 
     # debug for candidate
-    # if st is not StockType.DISCARD:
-    #     mpf.plot(detail, type='candle', mav=3, volume=False, title=title)
+    if st in DEBUG_STOCK_TYPE:
+        mpf.plot(detail, type='candle', mav=3, volume=False, title=title)
 
     # debug for all
-    # mpf.plot(detail, type='candle', mav=3, volume=False, title=title)
+    if DEBUG_ALL is True:
+        mpf.plot(detail, type='candle', mav=3, volume=False, title=title)
 
 
 # ['ts_code', 'trade_date', 'open', 'high', 'low', 'close', 'pre_close', 'change', 'pct_chg', 'vol', 'amount']
@@ -571,7 +607,7 @@ def is_sharp(stock_detail: DataFrame):
     vols = stock_detail['vol']
     avg_vol_hot = sum(vols[0:hot_days]) / hot_days
     avg_vol_history = sum(vols[hot_days:history_day]) / history_day
-    pole_vol = sum(vols[hot_days+1:hot_days])/hot_days
+    pole_vol = sum(vols[hot_days + 1:hot_days]) / hot_days
 
     if avg_vol_history == 0:
         return False
@@ -579,7 +615,7 @@ def is_sharp(stock_detail: DataFrame):
     if avg_vol_hot / avg_vol_history < hot_vol_ratio:
         return False
 
-    if abs(avg_vol_history-pole_vol)/avg_vol_history > 0.2:
+    if abs(avg_vol_history - pole_vol) / avg_vol_history > 0.2:
         return False
 
     return True
