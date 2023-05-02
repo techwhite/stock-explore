@@ -38,24 +38,13 @@ latest_pole_max_distinct = 5 # 最近的点不能太远
 hot_days = 3  # 保证大于2，最近几天交易量大增，价格上涨
 
 
+if __name__ == '__main__':
+    x1 = 0
+    y1 = 0
+    x2 = -1
+    y2 = -1
 
-
-def angle_trunc(a):
-    while a < 0.0:
-        a += pi * 2
-    b = a * 180 / pi
-    if b > 270:
-        b -= 360
-    if -90 < b < 90:
-        return b
-
-    print("invalid angle:{0}", b)
-
-
-def get_angle_between_points(x_orig, y_orig, x_landmark, y_landmark):
-    delta_y = y_landmark - y_orig
-    delta_x = x_landmark - x_orig
-    return angle_trunc(atan2(delta_y, delta_x))
+    print(get_angle_between_points(x1, y1, x2, y2))
 
 
 # angle between two vector
@@ -426,7 +415,7 @@ def get_discard_type(poles: list, detail: DataFrame):
                        detail.iloc[poles[idx][0]][Const.SMOOTH_KEY.name])
 
     discard_type = check_discard(intervals, changes)
-    if discard_type is not DiscardReason.NONE:
+    if discard_type is not DiscardReason.UNKNOWN:
         return discard_type
 
     intervals.clear()
@@ -439,10 +428,10 @@ def get_discard_type(poles: list, detail: DataFrame):
                        detail.iloc[poles[idx][0]][Const.SMOOTH_KEY.name])
 
     discard_type = check_discard(intervals, changes)
-    if discard_type is not DiscardReason.NONE:
+    if discard_type is not DiscardReason.UNKNOWN:
         return discard_type
 
-    return DiscardReason.NONE
+    return DiscardReason.UNKNOWN
 
 
 # return dataframe rows with pole type value
@@ -504,7 +493,7 @@ def check_stock_type(poles: list, detail: DataFrame, meta_data: {}) -> StockType
         return
 
     discard_reason = get_discard_type(poles, detail)
-    if discard_reason is not DiscardReason.NONE:
+    if discard_reason is not DiscardReason.UNKNOWN:
         meta_data[DebugKey.DISCARD_REASON] = discard_reason
         meta_data[DebugKey.STOCK_TYPE] = StockType.DISCARD
         return

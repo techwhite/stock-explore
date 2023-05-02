@@ -9,7 +9,8 @@ class DebugKey(Enum):
     SCORE = 0,
     DISCARD_REASON = 1,
     STOCK_TYPE = 2,
-    SORT_SCORE = 3
+    SCORE_CHANG_DEPTH = 3,
+    SCORE_CHANG_VAR = 4,
 
 
 class StockType(Enum):
@@ -21,7 +22,7 @@ class StockType(Enum):
     LONG_VALUE = 5,
     PHASED_INCREASE = 6,
     TURN_INCREASE = 7,
-    NONE = 100
+    UNKNOWN = 100
 
 
 class DiscardReason(Enum):
@@ -33,7 +34,9 @@ class DiscardReason(Enum):
     POLES_INTERVAL_TOO_SMALL = 5,
     POLES_CHANGE_TOO_SMALL = 6,
     TOO_SHORT_DAY_DATA = 7,
-    SHORT_SELLING = 8
+    SHORT_SELLING = 8,
+    DEBUG_SKIP = 9,
+    SMALL_DEPTH_OR_UNSTABLE = 10
 
 
 class PoleType(Enum):

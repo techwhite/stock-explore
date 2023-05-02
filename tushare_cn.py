@@ -1,3 +1,6 @@
+import os
+import shutil
+
 import commonV2 as lib
 
 import tushare as ts
@@ -63,14 +66,13 @@ def sub_find(sub_stocks: DataFrame, reason_stat: {}) -> {}:
             continue
 
         # todo: fix
-        candidate = sub_stocks.loc[sub_stocks['ts_code'] == ts_code]
-        candidate['type'] = st.name
-        sub_candidates[meta_data[DebugKey.SORT_SCORE]] = candidate
+        new_detail['st'] = st.name
+        sub_candidates[meta_data[DebugKey.SCORE_CHANG_DEPTH]] = new_detail
 
     return sub_candidates
 
 
-def find():
+def find() -> []:
     stocks = pro.stock_basic(exchange='', list_status='L', fields='ts_code,symbol,name,area,industry,list_date')
     candiates = {}
 
@@ -101,5 +103,10 @@ def find():
 if __name__ == '__main__':
     stocks = find()
     # stocks = do_query('600170.SH')
-    print(stocks)
+    folder = './pics/'
+    if os.path.exists(folder):
+        shutil.rmtree(folder)
+    os.mkdir(folder)
+    lib.save_pic(stocks, folder)
+    # print(stocks)
 
