@@ -444,7 +444,7 @@ def filtered_by_score1(detail: DataFrame, poles: list, meta_data: {}):
     avg = np.mean(close_change_pcts)
     var = np.var(close_change_pcts)
 
-    meta_data[DebugKey.SCORE_CHANG_DEPTH] = avg
+    meta_data[DebugKey.SCORE_CHANG_DEPTH] = avg*100
     meta_data[DebugKey.SCORE_CHANG_VAR] = var
 
     # todo: magic number
